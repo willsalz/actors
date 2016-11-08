@@ -1,0 +1,7 @@
+[package]
+name = "actor"
+version = "0.1.0"
+authors = ["Will Salisbury <wjs@uber.com>"]
+
+[dependencies]
+rand = "0.3.14"
