@@ -1,7 +1,6 @@
 [package]
-name = "actor"
+name = "actors"
 version = "0.1.0"
-authors = ["Will Salisbury <wjs@uber.com>"]
+authors = ["Will Salisbury <wjsalisbury at gmail dot com>"]
 
 [dependencies]
-rand = "0.3.14"
