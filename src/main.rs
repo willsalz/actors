@@ -4,7 +4,11 @@ use std::sync::mpsc;
 use std::thread;
 
 type Payload = i32;
-type Message = (Payload, Sender<Payload>);
+
+struct Message {
+    payload: i32,
+    sender: Sender<i32>,
+}
 
 fn main() {
     // Actor Mailbox
@@ -19,15 +23,15 @@ fn main() {
                 // See if we have messages!
                 match inbox.recv() {
                     // If we're given a 'special' -1 value, exit.
-                    Ok((num, _)) if num == -1 => {
+                    Ok(Message{payload: num, sender: _}) if num == -1 => {
                         println!("[Actor] Exiting!");
                         break;
-                    }
+                    },
                     // Otherwise, print and respond to the message!
-                    Ok((num, sender)) => {
+                    Ok(Message{payload: num, sender: sender}) => {
                         println!("[Actor] Got: {:?}", num);
                         sender.send(num + 1).unwrap();
-                    }
+                    },
                     // Exit on error
                     Err(e) => {
                         println!("[Actor] Error: {:?}", e);
@@ -41,17 +45,17 @@ fn main() {
 
     // Communication channel with actor
     let (sender, receiver): (Sender<Payload>, Receiver<Payload>) = mpsc::channel();
-    outbox.send((0, sender.clone())).unwrap();
+    outbox.send(Message{payload: 0, sender: sender.clone()}).unwrap();
     let num = receiver.recv().unwrap();
     println!("[Main] Got: {:?}", num);
 
     // Send another number!
-    outbox.send((num + 1, sender.clone())).unwrap();
+    outbox.send(Message{payload: num + 1, sender: sender.clone()}).unwrap();
     let num = receiver.recv().unwrap();
     println!("[Main] Got: {:?}", num);
 
     // Send exit code
-    outbox.send((-1, sender.clone())).unwrap();
+    outbox.send(Message{payload: -1, sender: sender.clone()}).unwrap();
 
     // Wait for thread to exit
     let res = handle.join().unwrap();
