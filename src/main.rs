@@ -1,4 +1,4 @@
-#![feature(core, unboxed_closures, fn_traits)]
+#![feature(unboxed_closures, fn_traits)]
 // MSPC == 'multiple sender, single receiver'
 use std::sync::mpsc::{Sender, Receiver};
 use std::sync::mpsc;
@@ -23,20 +23,20 @@ impl Actor {
 
 impl FnOnce<()> for Actor {
     type Output = ();
-    extern "rust-call" fn call_once(self, args: ()) -> () {
+    extern "rust-call" fn call_once(self, _: ()) -> () {
         // Forever...
         loop {
             // See if we have messages!
             match self.inbox.recv() {
                 // If we're given a 'special' -1 value, exit.
-                Ok(Message{payload: num, sender: _}) if num == -1 => {
+                Ok(Message{payload, sender: _}) if payload == -1 => {
                     println!("[Actor] Exiting!");
                     break;
                 },
                 // Otherwise, print and respond to the message!
-                Ok(Message{payload: num, sender: sender}) => {
-                    println!("[Actor] Got: {:?}", num);
-                    sender.send(num + 1).unwrap();
+                Ok(Message{payload, sender}) => {
+                    println!("[Actor] Got: {:?}", payload);
+                    sender.send(payload + 1).unwrap();
                 },
                 // Exit on error
                 Err(e) => {
