@@ -10,9 +10,32 @@ struct Message {
     sender: Sender<i32>,
 }
 
+struct Actor {
+    inbox: Receiver<Message>
+}
+
+impl Actor {
+    fn new(inbox: Receiver<Message>) -> Actor {
+        Actor{inbox: inbox}
+    }
+}
+
+struct ActorRef {
+    outbox: Sender<Message>
+}
+
+impl ActorRef {
+    fn new(outbox: Sender<Message>) -> ActorRef {
+        ActorRef{outbox: outbox}
+    }
+}
+
 fn main() {
     // Actor Mailbox
     let (outbox, inbox): (Sender<Message>, Receiver<Message>) = mpsc::channel();
+
+    let actor = Actor::new(inbox);
+    let r = ActorRef::new(outbox);
 
     // Create a new thread
     let handle = thread::Builder::new()
@@ -21,7 +44,7 @@ fn main() {
             // Forever...
             loop {
                 // See if we have messages!
-                match inbox.recv() {
+                match actor.inbox.recv() {
                     // If we're given a 'special' -1 value, exit.
                     Ok(Message{payload: num, sender: _}) if num == -1 => {
                         println!("[Actor] Exiting!");
@@ -45,17 +68,17 @@ fn main() {
 
     // Communication channel with actor
     let (sender, receiver): (Sender<Payload>, Receiver<Payload>) = mpsc::channel();
-    outbox.send(Message{payload: 0, sender: sender.clone()}).unwrap();
+    r.outbox.send(Message{payload: 0, sender: sender.clone()}).unwrap();
     let num = receiver.recv().unwrap();
     println!("[Main] Got: {:?}", num);
 
     // Send another number!
-    outbox.send(Message{payload: num + 1, sender: sender.clone()}).unwrap();
+    r.outbox.send(Message{payload: num + 1, sender: sender.clone()}).unwrap();
     let num = receiver.recv().unwrap();
     println!("[Main] Got: {:?}", num);
 
     // Send exit code
-    outbox.send(Message{payload: -1, sender: sender.clone()}).unwrap();
+    r.outbox.send(Message{payload: -1, sender: sender.clone()}).unwrap();
 
     // Wait for thread to exit
     let res = handle.join().unwrap();
