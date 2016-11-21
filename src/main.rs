@@ -1,3 +1,4 @@
+#![feature(core, unboxed_closures, fn_traits)]
 // MSPC == 'multiple sender, single receiver'
 use std::sync::mpsc::{Sender, Receiver};
 use std::sync::mpsc;
@@ -6,8 +7,8 @@ use std::thread;
 type Payload = i32;
 
 struct Message {
-    payload: i32,
-    sender: Sender<i32>,
+    payload: Payload,
+    sender: Sender<Payload>,
 }
 
 struct Actor {
@@ -17,6 +18,33 @@ struct Actor {
 impl Actor {
     fn new(inbox: Receiver<Message>) -> Actor {
         Actor{inbox: inbox}
+    }
+}
+
+impl FnOnce<()> for Actor {
+    type Output = ();
+    extern "rust-call" fn call_once(self, args: ()) -> () {
+        // Forever...
+        loop {
+            // See if we have messages!
+            match self.inbox.recv() {
+                // If we're given a 'special' -1 value, exit.
+                Ok(Message{payload: num, sender: _}) if num == -1 => {
+                    println!("[Actor] Exiting!");
+                    break;
+                },
+                // Otherwise, print and respond to the message!
+                Ok(Message{payload: num, sender: sender}) => {
+                    println!("[Actor] Got: {:?}", num);
+                    sender.send(num + 1).unwrap();
+                },
+                // Exit on error
+                Err(e) => {
+                    println!("[Actor] Error: {:?}", e);
+                    break;
+                },
+            }
+        }
     }
 }
 
@@ -40,30 +68,7 @@ fn main() {
     // Create a new thread
     let handle = thread::Builder::new()
         .name("actor".into())
-        .spawn(move || {
-            // Forever...
-            loop {
-                // See if we have messages!
-                match actor.inbox.recv() {
-                    // If we're given a 'special' -1 value, exit.
-                    Ok(Message{payload: num, sender: _}) if num == -1 => {
-                        println!("[Actor] Exiting!");
-                        break;
-                    },
-                    // Otherwise, print and respond to the message!
-                    Ok(Message{payload: num, sender: sender}) => {
-                        println!("[Actor] Got: {:?}", num);
-                        sender.send(num + 1).unwrap();
-                    },
-                    // Exit on error
-                    Err(e) => {
-                        println!("[Actor] Error: {:?}", e);
-                        break;
-                    },
-                }
-            }
-
-        })
+        .spawn(actor)
         .unwrap();
 
     // Communication channel with actor
