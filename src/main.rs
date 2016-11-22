@@ -11,21 +11,29 @@ struct Message {
     sender: Sender<Payload>,
 }
 
-struct Actor {
-    inbox: Receiver<Message>
+trait Actor {
+    fn run(&self) -> ();
 }
 
-impl Actor {
-    fn new(inbox: Receiver<Message>) -> Actor {
-        Actor{inbox: inbox}
+struct ActorHarness<T: Actor> {
+    inbox: Receiver<Message>,
+    actor: T
+}
+
+impl<T: Actor> ActorHarness<T> {
+    fn new(inbox: Receiver<Message>, actor: T) -> ActorHarness<T> {
+        ActorHarness{inbox: inbox, actor: actor}
     }
 }
 
-impl FnOnce<()> for Actor {
+impl<T: Actor> FnOnce<()> for ActorHarness<T> {
     type Output = ();
     extern "rust-call" fn call_once(self, _: ()) -> () {
         // Forever...
         loop {
+
+            self.actor.run();
+
             // See if we have messages!
             match self.inbox.recv() {
                 // If we're given a 'special' -1 value, exit.
@@ -58,17 +66,33 @@ impl ActorRef {
     }
 }
 
+struct ActorImpl {
+}
+
+impl ActorImpl {
+    fn new() -> ActorImpl {
+        ActorImpl {}
+    }
+}
+
+impl Actor for ActorImpl {
+    fn run(&self) -> () {
+        println!("Hello!");
+    }
+}
+
 fn main() {
     // Actor Mailbox
     let (outbox, inbox): (Sender<Message>, Receiver<Message>) = mpsc::channel();
 
-    let actor = Actor::new(inbox);
+    let actor = ActorImpl::new();
+    let harness = ActorHarness::new(inbox, actor);
     let r = ActorRef::new(outbox);
 
     // Create a new thread
     let handle = thread::Builder::new()
         .name("actor".into())
-        .spawn(actor)
+        .spawn(harness)
         .unwrap();
 
     // Communication channel with actor
