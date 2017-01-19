@@ -2,6 +2,7 @@
 
 #[macro_use]
 extern crate log;
+extern crate env_logger;
 
 use std::sync::mpsc::{Sender, Receiver};
 use std::sync::mpsc;
@@ -87,6 +88,9 @@ impl Actor for ActorImpl {
 }
 
 fn main() {
+    // Init logging
+    env_logger::init().unwrap();
+
     // Actor Mailbox
     let (outbox, inbox): (Sender<Message>, Receiver<Message>) = mpsc::channel();
 
