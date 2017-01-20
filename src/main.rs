@@ -15,47 +15,98 @@ struct Envelope<In, Out> {
     output: Sender<Out>,
 }
 
+impl<In, Out> Envelope<In, Out> {
+    fn new(input: In, output: Sender<Out>) -> Self {
+        Envelope {
+            input: input,
+            output: output,
+        }
+    }
+}
+
 trait Actor {
     type In;
     type Out;
 
     fn handle(&self, message: Envelope<Self::In, Self::Out>) -> ();
-    fn inbox(&self) -> Sender<Self::In>;
 }
 
 #[derive(Debug)]
-struct ActorHandle<A: Actor> {
-    actor: A,
+struct ActorHandle<In, Out> {
+    outbox: Sender<Envelope<In, Out>>,
 }
 
-impl<A: Actor> ActorHandle<A> {
-    fn call(&self, args: A::In) -> A::Out {
-        unimplemented!();
+impl<In, Out> ActorHandle<In, Out> {
+    fn new(outbox: Sender<Envelope<In, Out>>) -> Self {
+        ActorHandle { outbox: outbox }
+    }
+
+    fn call(&self, args: In) -> Out {
+        let (tx, rx) = mpsc::channel();
+        let e = Envelope::new(args, tx);
+        self.outbox.send(e).unwrap();
+        rx.recv().unwrap()
     }
 }
+
+#[derive(Debug)]
+struct ActorRunner<A: Actor> {
+    actor: A,
+    inbox: Receiver<Envelope<A::In, A::Out>>,
+}
+
+impl<A: Actor> ActorRunner<A> {
+    fn new(actor: A, inbox: Receiver<Envelope<A::In, A::Out>>) -> Self {
+        ActorRunner {
+            actor: actor,
+            inbox: inbox,
+        }
+    }
+}
+
+impl<A: Actor> FnOnce<()> for ActorRunner<A> {
+    type Output = ();
+    extern "rust-call" fn call_once(self, _: ()) -> () {
+        // Forever...
+        loop {
+            // See if we have messages!
+            match self.inbox.recv() {
+                Ok(m) => self.actor.handle(m),
+                // Exit on error
+                Err(e) => {
+                    error!("[Actor] Error: {:?}", e);
+                    break;
+                }
+            }
+        }
+    }
+}
+
 
 // Impl
 #[derive(Debug)]
-struct EchoActor {
-    inbox: Sender<i32>,
-}
+struct EchoActor;
 
 impl Actor for EchoActor {
     type In = i32;
-    type Out = i32;
+    type Out = Self::In;
 
     fn handle(&self, message: Envelope<Self::In, Self::Out>) -> () {
-        message.output.send(message.input).unwrap();
-    }
-
-    fn inbox(&self) -> Sender<Self::In> {
-        return self.inbox.clone();
+        message.output.send(1 / message.input).unwrap();
     }
 }
 
 fn main() {
     let (tx, rx) = mpsc::channel();
-    let a = EchoActor { inbox: tx };
-    let h = ActorHandle { actor: a };
-    info!("{:?}", h.call(42));
+    let a = EchoActor;
+    let h = ActorHandle::new(tx);
+    let r = ActorRunner::new(a, rx);
+    let t = thread::Builder::new()
+        .name("actor".into())
+        .spawn(r)
+        .unwrap();
+
+    info!("{:?}", h.call(1));
+    info!("{:?}", h.call(0));
+    t.join().unwrap();
 }
