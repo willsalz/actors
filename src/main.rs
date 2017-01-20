@@ -7,6 +7,7 @@ extern crate env_logger;
 use std::sync::mpsc::{Sender, Receiver};
 use std::sync::mpsc;
 use std::thread;
+use std::io;
 
 // Lib
 #[derive(Debug)]
@@ -28,7 +29,7 @@ trait Actor {
     type In;
     type Out;
 
-    fn handle(&self, message: Envelope<Self::In, Self::Out>) -> ();
+    fn handle(&self, message: Envelope<Self::In, Self::Out>) -> io::Result<()>;
 }
 
 #[derive(Debug)]
@@ -70,11 +71,18 @@ impl<A: Actor> FnOnce<()> for ActorRunner<A> {
         // Forever...
         loop {
             // See if we have messages!
+            // NOTE: this blocks the thread until we have messages
             match self.inbox.recv() {
-                Ok(m) => self.actor.handle(m),
+                // Pass message to actor
+                Ok(m) => {
+                    if let Err(e) = self.actor.handle(m) {
+                        info!("[Actor] Actor returned Error, shutting down: {:?}", e);
+                        break;
+                    }
+                }
                 // Exit on error
-                Err(e) => {
-                    error!("[Actor] Error: {:?}", e);
+                Err(mpsc::RecvError) => {
+                    info!("[Actor] Channel gone, shutting down");
                     break;
                 }
             }
@@ -91,22 +99,31 @@ impl Actor for EchoActor {
     type In = i32;
     type Out = Self::In;
 
-    fn handle(&self, message: Envelope<Self::In, Self::Out>) -> () {
-        message.output.send(1 / message.input).unwrap();
+    fn handle(&self, message: Envelope<Self::In, Self::Out>) -> io::Result<()> {
+        message.output.send(message.input).unwrap();
+        Ok(())
     }
 }
 
-fn main() {
+fn run() -> thread::JoinHandle<()> {
     let (tx, rx) = mpsc::channel();
     let a = EchoActor;
     let h = ActorHandle::new(tx);
     let r = ActorRunner::new(a, rx);
     let t = thread::Builder::new()
-        .name("actor".into())
+        .name("EchoActor".into())
         .spawn(r)
         .unwrap();
 
-    info!("{:?}", h.call(1));
     info!("{:?}", h.call(0));
+    info!("{:?}", h.call(1));
+    t
+}
+
+fn main() {
+    // Init Logging
+    env_logger::init().unwrap();
+
+    let t = run();
     t.join().unwrap();
 }
