@@ -1,129 +1,127 @@
-#![feature(unboxed_closures, fn_traits, rustc_private)]
-
-#[macro_use]
-extern crate log;
-extern crate env_logger;
+#![feature(unboxed_closures, fn_traits)]
 
 use std::sync::mpsc::{Sender, Receiver};
 use std::sync::mpsc;
 use std::thread;
-use std::io;
 
-// Lib
-#[derive(Debug)]
-struct Envelope<In, Out> {
-    input: In,
-    output: Sender<Out>,
+type Payload = i32;
+
+struct Message {
+    payload: Payload,
+    sender: Sender<Payload>,
 }
 
-impl<In, Out> Envelope<In, Out> {
-    fn new(input: In, output: Sender<Out>) -> Self {
-        Envelope {
-            input: input,
-            output: output,
-        }
-    }
+#[derive(Debug)]
+enum ActorStatus  {
+    Ok,
+    Done,
 }
 
 trait Actor {
-    type In;
-    type Out;
-
-    fn handle(&self, message: Envelope<Self::In, Self::Out>) -> io::Result<()>;
+    fn handle(&self, message: Message) -> ActorStatus;
 }
 
-#[derive(Debug)]
-struct ActorHandle<In, Out> {
-    outbox: Sender<Envelope<In, Out>>,
+struct ActorHarness<T: Actor> {
+    inbox: Receiver<Message>,
+    actor: T
 }
 
-impl<In, Out> ActorHandle<In, Out> {
-    fn new(outbox: Sender<Envelope<In, Out>>) -> Self {
-        ActorHandle { outbox: outbox }
-    }
-
-    fn call(&self, args: In) -> Out {
-        let (tx, rx) = mpsc::channel();
-        let e = Envelope::new(args, tx);
-        self.outbox.send(e).unwrap();
-        rx.recv().unwrap()
+impl<T: Actor> ActorHarness<T> {
+    fn new(inbox: Receiver<Message>, actor: T) -> ActorHarness<T> {
+        ActorHarness{inbox: inbox, actor: actor}
     }
 }
 
-#[derive(Debug)]
-struct ActorRunner<A: Actor> {
-    actor: A,
-    inbox: Receiver<Envelope<A::In, A::Out>>,
-}
-
-impl<A: Actor> ActorRunner<A> {
-    fn new(actor: A, inbox: Receiver<Envelope<A::In, A::Out>>) -> Self {
-        ActorRunner {
-            actor: actor,
-            inbox: inbox,
-        }
-    }
-}
-
-impl<A: Actor> FnOnce<()> for ActorRunner<A> {
+impl<T: Actor> FnOnce<()> for ActorHarness<T> {
     type Output = ();
     extern "rust-call" fn call_once(self, _: ()) -> () {
         // Forever...
         loop {
             // See if we have messages!
-            // NOTE: this blocks the thread until we have messages
-            match self.inbox.recv() {
-                // Pass message to actor
-                Ok(m) => {
-                    if let Err(e) = self.actor.handle(m) {
-                        info!("[Actor] Actor returned Error, shutting down: {:?}", e);
-                        break;
-                    }
-                }
+            let status = match self.inbox.recv() {
+                Ok(m) => self.actor.handle(m),
                 // Exit on error
-                Err(mpsc::RecvError) => {
-                    info!("[Actor] Channel gone, shutting down");
+                Err(e) => {
+                    println!("[Actor] Error: {:?}", e);
                     break;
-                }
+                },
+            };
+            match status {
+                ActorStatus::Ok => (),
+                ActorStatus::Done => break,
+            }
+            
+        }
+    }
+}
+
+struct ActorRef {
+    outbox: Sender<Message>
+}
+
+impl ActorRef {
+    fn new(outbox: Sender<Message>) -> ActorRef {
+        ActorRef{outbox: outbox}
+    }
+}
+
+struct ActorImpl {
+}
+
+impl ActorImpl {
+    fn new() -> ActorImpl {
+        ActorImpl {}
+    }
+}
+
+impl Actor for ActorImpl {
+    fn handle(&self, message: Message) -> ActorStatus {
+        match message {
+            // If we're given a 'special' -1 value, exit.
+            Message{payload, sender: _} if payload == -1 => {
+                println!("[Actor] Exiting!");
+                ActorStatus::Done
+            },
+            // Otherwise, print and respond to the message!
+            Message{payload, sender} => {
+                println!("[Actor] Got: {:?}", payload);
+                sender.send(payload + 1).unwrap();
+                ActorStatus::Ok
             }
         }
     }
 }
 
+fn main() {
+    // Actor Mailbox
+    let (outbox, inbox): (Sender<Message>, Receiver<Message>) = mpsc::channel();
 
-// Impl
-#[derive(Debug)]
-struct EchoActor;
+    // Meet the players
+    let actor = ActorImpl::new();
+    let harness = ActorHarness::new(inbox, actor);
+    let r = ActorRef::new(outbox);
 
-impl Actor for EchoActor {
-    type In = i32;
-    type Out = Self::In;
-
-    fn handle(&self, message: Envelope<Self::In, Self::Out>) -> io::Result<()> {
-        message.output.send(message.input).unwrap();
-        Ok(())
-    }
-}
-
-fn run() -> thread::JoinHandle<()> {
-    let (tx, rx) = mpsc::channel();
-    let a = EchoActor;
-    let h = ActorHandle::new(tx);
-    let r = ActorRunner::new(a, rx);
-    let t = thread::Builder::new()
-        .name("EchoActor".into())
-        .spawn(r)
+    // Create a new thread
+    let handle = thread::Builder::new()
+        .name("actor".into())
+        .spawn(harness)
         .unwrap();
 
-    info!("{:?}", h.call(0));
-    info!("{:?}", h.call(1));
-    t
-}
+    // Communication channel with actor
+    let (sender, receiver): (Sender<Payload>, Receiver<Payload>) = mpsc::channel();
+    r.outbox.send(Message{payload: 0, sender: sender.clone()}).unwrap();
+    let num = receiver.recv().unwrap();
+    println!("[Main] Got: {:?}", num);
 
-fn main() {
-    // Init Logging
-    env_logger::init().unwrap();
+    // Send another number!
+    r.outbox.send(Message{payload: num + 1, sender: sender.clone()}).unwrap();
+    let num = receiver.recv().unwrap();
+    println!("[Main] Got: {:?}", num);
 
-    let t = run();
-    t.join().unwrap();
+    // Send exit code
+    r.outbox.send(Message{payload: -1, sender: sender.clone()}).unwrap();
+
+    // Wait for thread to exit
+    let res = handle.join();
+    println!("[Main] Res: {:?}", res);
 }
